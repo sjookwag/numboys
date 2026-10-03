@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+crypto_data.db
+.env

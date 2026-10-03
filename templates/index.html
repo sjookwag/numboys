@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitget Crypto Analytics</title>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #121212; color: #fff; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+        .sidebar { width: 250px; background-color: #1e1e1e; border-right: 1px solid #333; padding: 20px; display: flex; flex-direction: column; flex-shrink: 0; }
+        .sidebar h3 { margin-top: 0; margin-bottom: 25px; color: #4bffb5; }
+        .sidebar-section { margin-bottom: 25px; }
+        .sidebar-section h4 { margin: 0 0 10px 0; color: #888; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+        .sidebar-menu { list-style: none; padding: 0; margin: 0; }
+        .sidebar-menu li { padding: 10px 12px; margin-bottom: 5px; background-color: #2c2c2c; border-radius: 4px; cursor: pointer; transition: background 0.2s; font-size: 14px; }
+        .sidebar-menu li:hover { background-color: #3a3a3a; }
+        .sidebar-menu li.active { background-color: #4bffb5; color: #121212; font-weight: bold; }
+        .main-content { flex: 1; display: flex; flex-direction: column; padding: 20px; overflow-y: auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .header h2 { margin: 0; }
+        .controls select, .controls button { padding: 8px 12px; margin-right: 10px; background: #2c2c2c; color: white; border: 1px solid #444; border-radius: 4px; cursor: pointer; }
+        .controls button:hover { background: #3a3a3a; }
+        .controls label { margin-right: 15px; cursor: pointer; display: flex; align-items: center; font-size: 14px; }
+        .controls input[type="checkbox"] { margin-right: 5px; }
+        .controls { display: flex; align-items: center; flex-wrap: wrap; }
+        #chart-container { width: 100%; flex: 1; position: relative; min-height: 400px; }
+        .tv-lightweight-charts { border-radius: 8px; border: 1px solid #333; }
+        .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 4px; z-index: 10; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h3>Analytics Platform</h3>
+        
+        <div class="sidebar-section">
+            <h4>Main</h4>
+            <ul class="sidebar-menu">
+                <li class="active">Chart & Data</li>
+            </ul>
+        </div>
+        
+        <div class="sidebar-section">
+            <h4>Technical Analysis</h4>
+            <ul class="sidebar-menu">
+                <li onclick="alert('Moving Averages are available in the top control bar!')">Moving Averages</li>
+                <li>RSI & MACD (Soon)</li>
+                <li>Bollinger Bands (Soon)</li>
+            </ul>
+        </div>
+
+        <div class="sidebar-section">
+            <h4>Quant Statistics</h4>
+            <ul class="sidebar-menu">
+                <li>Volatility Profile (Soon)</li>
+                <li>Volume Analysis (Soon)</li>
+                <li>Backtest Engine (Soon)</li>
+            </ul>
+        </div>
+    </div>
+    <div class="main-content">
+        <div class="header">
+            <h2>Crypto Data Pipeline</h2>
+            <div class="controls">
+                <select id="symbol-select"></select>
+                <select id="timeframe-select"></select>
+                <button onclick="loadData()">Load Chart</button>
+                <label><input type="checkbox" id="ma20-toggle" checked onchange="toggleMA('ma20')"> MA 20</label>
+                <label><input type="checkbox" id="ma50-toggle" checked onchange="toggleMA('ma50')"> MA 50</label>
+                <label><input type="checkbox" id="ma200-toggle" checked onchange="toggleMA('ma200')"> MA 200</label>
+                <div style="width: 1px; height: 24px; background: #444; margin: 0 10px;"></div>
+                <button onclick="zoomIn()">Zoom In</button>
+                <button onclick="zoomOut()">Zoom Out</button>
+                <button onclick="resetZoom()">Reset Zoom</button>
+            </div>
+        </div>
+        <div id="chart-container">
+            <div class="loading" id="loading">Loading data...</div>
+        </div>
+    </div>
+
+    <script>
+        let chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
+            layout: {
+                background: { type: 'solid', color: '#1e1e1e' },
+                textColor: '#DDD',
+            },
+            grid: {
+                vertLines: { color: '#333' },
+                horzLines: { color: '#333' },
+            },
+            crosshair: {
+                mode: LightweightCharts.CrosshairMode.Normal,
+            },
+            rightPriceScale: {
+                borderColor: '#444',
+            },
+            timeScale: {
+                borderColor: '#444',
+                timeVisible: true,
+            },
+        });
+
+        const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+            upColor: '#4bffb5',
+            downColor: '#ff4976',
+            borderDownColor: '#ff4976',
+            borderUpColor: '#4bffb5',
+            wickDownColor: '#838ca1',
+            wickUpColor: '#838ca1',
+        });
+
+        const volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceFormat: {
+                type: 'volume',
+            },
+            priceScaleId: '', 
+        });
+
+        volumeSeries.priceScale().applyOptions({
+            scaleMargins: {
+                top: 0.8, 
+                bottom: 0,
+            },
+        });
+
+        const ma20Series = chart.addSeries(LightweightCharts.LineSeries, { color: 'rgba(255, 192, 0, 1)', lineWidth: 2, crosshairMarkerVisible: false });
+        const ma50Series = chart.addSeries(LightweightCharts.LineSeries, { color: 'rgba(255, 128, 0, 1)', lineWidth: 2, crosshairMarkerVisible: false });
+        const ma200Series = chart.addSeries(LightweightCharts.LineSeries, { color: 'rgba(0, 192, 255, 1)', lineWidth: 2, crosshairMarkerVisible: false });
+        
+        let currentCandleData = [];
+
+        function toggleMA(ma) {
+            let series, checkboxId;
+            if (ma === 'ma20') { series = ma20Series; checkboxId = 'ma20-toggle'; }
+            if (ma === 'ma50') { series = ma50Series; checkboxId = 'ma50-toggle'; }
+            if (ma === 'ma200') { series = ma200Series; checkboxId = 'ma200-toggle'; }
+            
+            const isChecked = document.getElementById(checkboxId).checked;
+            series.applyOptions({ visible: isChecked });
+        }
+        
+        function calculateSMA(data, period) {
+            const sma = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < period - 1) {
+                    continue;
+                }
+                let sum = 0;
+                for (let j = 0; j < period; j++) {
+                    sum += data[i - j].close;
+                }
+                sma.push({ time: data[i].time, value: sum / period });
+            }
+            return sma;
+        }
+
+        function zoomIn() {
+            const currentOptions = chart.timeScale().options();
+            chart.timeScale().applyOptions({
+                barSpacing: currentOptions.barSpacing + 2,
+            });
+        }
+
+        function zoomOut() {
+            const currentOptions = chart.timeScale().options();
+            chart.timeScale().applyOptions({
+                barSpacing: Math.max(1, currentOptions.barSpacing - 2),
+            });
+        }
+
+        function resetZoom() {
+            chart.timeScale().fitContent();
+        }
+
+        async function init() {
+            const symbolsRes = await fetch('/api/symbols');
+            const symbols = await symbolsRes.json();
+            const symbolSelect = document.getElementById('symbol-select');
+            symbols.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s;
+                opt.textContent = s;
+                symbolSelect.appendChild(opt);
+            });
+
+            const tfRes = await fetch('/api/timeframes');
+            const timeframes = await tfRes.json();
+            const tfSelect = document.getElementById('timeframe-select');
+            timeframes.forEach(tf => {
+                const opt = document.createElement('option');
+                opt.value = tf;
+                opt.textContent = tf;
+                tfSelect.appendChild(opt);
+            });
+
+            loadData();
+        }
+
+        async function loadData() {
+            document.getElementById('loading').style.display = 'block';
+            const symbol = document.getElementById('symbol-select').value;
+            const timeframe = document.getElementById('timeframe-select').value;
+
+            try {
+                const res = await fetch(`/api/data?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}`);
+                const data = await res.json();
+                
+                if(data.candlestick.length > 0) {
+                    currentCandleData = data.candlestick;
+                    candleSeries.setData(data.candlestick);
+                    volumeSeries.setData(data.volume);
+                    
+                    ma20Series.setData(calculateSMA(currentCandleData, 20));
+                    ma50Series.setData(calculateSMA(currentCandleData, 50));
+                    ma200Series.setData(calculateSMA(currentCandleData, 200));
+
+                    chart.timeScale().fitContent();
+                } else {
+                    currentCandleData = [];
+                    candleSeries.setData([]);
+                    volumeSeries.setData([]);
+                    ma20Series.setData([]);
+                    ma50Series.setData([]);
+                    ma200Series.setData([]);
+                    alert("No data available for this selection.");
+                }
+            } catch(e) {
+                console.error("Error loading data", e);
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            const container = document.getElementById('chart-container');
+            chart.resize(container.clientWidth, container.clientHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>
