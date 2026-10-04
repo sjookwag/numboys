@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bitget Crypto Analytics</title>
     <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #121212; color: #fff; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
         .sidebar { width: 250px; background-color: #1e1e1e; border-right: 1px solid #333; padding: 20px; display: flex; flex-direction: column; flex-shrink: 0; }
@@ -35,7 +36,7 @@
         <div class="sidebar-section">
             <h4>Main</h4>
             <ul class="sidebar-menu">
-                <li class="active">Chart & Data</li>
+                <li id="nav-chart" class="active" onclick="switchView('chart')">Chart & Data</li>
             </ul>
         </div>
         
@@ -51,6 +52,9 @@
         <div class="sidebar-section">
             <h4>Quant Statistics</h4>
             <ul class="sidebar-menu">
+                <li id="nav-vwap" onclick="switchView('vwap')">VWAP Histogram</li>
+                <li id="nav-mdd" onclick="switchView('mdd')">MDD & Peak Recovery Period</li>
+                <li id="nav-heatmap" onclick="switchView('heatmap')">Return Distribution Heatmap</li>
                 <li>Volatility Profile (Soon)</li>
                 <li>Volume Analysis (Soon)</li>
                 <li>Backtest Engine (Soon)</li>
@@ -76,6 +80,12 @@
         <div id="chart-container">
             <div class="loading" id="loading">Loading data...</div>
         </div>
+        <div id="vwap-container" style="display: none; width: 100%; flex: 1; position: relative;"></div>
+        <div id="mdd-container" style="display: none; width: 100%; flex: 1; flex-direction: column;">
+            <div id="mdd-stats-text" style="padding: 20px; background: #2c2c2c; border-radius: 8px; margin-bottom: 20px;"></div>
+            <div id="mdd-chart-div" style="flex: 1; min-height: 400px; position: relative;"></div>
+        </div>
+        <div id="heatmap-container" style="display: none; width: 100%; flex: 1; position: relative;"></div>
     </div>
 
     <script>
@@ -153,7 +163,323 @@
             }
             return sma;
         }
+        function calculateVWAP(candlestickData, volumeData) {
+            let cumulativeVP = 0;
+            let cumulativeVol = 0;
+            const vwapValues = [];
+            
+            for (let i = 0; i < candlestickData.length; i++) {
+                const c = candlestickData[i];
+                const v = volumeData[i].value;
+                const typicalPrice = (c.high + c.low + c.close) / 3;
+                cumulativeVP += typicalPrice * v;
+                cumulativeVol += v;
+                if (cumulativeVol === 0) {
+                    vwapValues.push(c.close);
+                } else {
+                    vwapValues.push(cumulativeVP / cumulativeVol);
+                }
+            }
+            return vwapValues;
+        }
 
+        function drawVWAPHistogram(vwapValues) {
+            const latestVwap = vwapValues[vwapValues.length - 1];
+            
+            const trace = {
+                x: vwapValues,
+                type: 'histogram',
+                marker: { color: '#4bffb5' },
+                opacity: 0.8
+            };
+            const layout = {
+                title: 'VWAP Frequency Distribution',
+                paper_bgcolor: '#1e1e1e',
+                plot_bgcolor: '#1e1e1e',
+                font: { color: '#DDD' },
+                xaxis: { title: 'VWAP Value', gridcolor: '#333' },
+                yaxis: { title: 'Frequency (Number of Candles)', gridcolor: '#333' },
+                margin: { l: 50, r: 50, t: 50, b: 50 }
+            };
+            
+            Plotly.newPlot('vwap-container', [trace], layout, {responsive: true}).then(function(gd) {
+                let targetY = 0;
+                let targetX = latestVwap;
+                
+                if (gd.calcdata && gd.calcdata[0]) {
+                    const bins = gd.calcdata[0];
+                    let minDiff = Infinity;
+                    for (let i = 0; i < bins.length; i++) {
+                        const pt = bins[i];
+                        const diff = Math.abs(pt.x - latestVwap);
+                        if (diff < minDiff) {
+                            minDiff = diff;
+                            targetY = pt.y;
+                            targetX = pt.x;
+                        }
+                    }
+                }
+                
+                Plotly.relayout('vwap-container', {
+                    annotations: [{
+                        x: targetX,
+                        y: targetY,
+                        text: '<span style="font-size: 35px; color: #ff4976; line-height: 0.5;">*</span>',
+                        showarrow: false,
+                        yanchor: 'bottom',
+                        yshift: 2
+                    }]
+                });
+            });
+        }
+
+        function calculateMDDAndRecovery(data) {
+            if (data.length === 0) return null;
+            
+            let currentPeak = data[0].close;
+            let currentPeakTime = data[0].time;
+            
+            let maxDrawdown = 0;
+            let mddPeakPrice = data[0].close;
+            let mddPeakTime = data[0].time;
+            let mddTroughPrice = data[0].close;
+            let mddTroughTime = data[0].time;
+            let mddTroughIndex = 0;
+
+            for (let i = 0; i < data.length; i++) {
+                let price = data[i].close;
+                if (price > currentPeak) {
+                    currentPeak = price;
+                    currentPeakTime = data[i].time;
+                }
+                
+                let drawdown = (currentPeak - price) / currentPeak;
+                if (drawdown > maxDrawdown) {
+                    maxDrawdown = drawdown;
+                    mddPeakPrice = currentPeak;
+                    mddPeakTime = currentPeakTime;
+                    mddTroughPrice = price;
+                    mddTroughTime = data[i].time;
+                    mddTroughIndex = i;
+                }
+            }
+            
+            let recoveryTime = null;
+            let recoveryDuration = null;
+            let recovered = false;
+            
+            for (let i = mddTroughIndex + 1; i < data.length; i++) {
+                if (data[i].close >= mddPeakPrice) {
+                    recoveryTime = data[i].time;
+                    recoveryDuration = recoveryTime - mddTroughTime;
+                    recovered = true;
+                    break;
+                }
+            }
+            
+            return {
+                maxDrawdown,
+                mddPeakPrice,
+                mddPeakTime,
+                mddTroughPrice,
+                mddTroughTime,
+                recovered,
+                recoveryTime,
+                recoveryDuration
+            };
+        }
+
+        function drawMDDView(data, mddStats) {
+            if (!mddStats) return;
+            
+            const pct = (mddStats.maxDrawdown * 100).toFixed(2);
+            let recText = "Not yet recovered";
+            if (mddStats.recovered) {
+                const days = Math.floor(mddStats.recoveryDuration / 86400);
+                const hours = Math.floor((mddStats.recoveryDuration % 86400) / 3600);
+                recText = `${days} days, ${hours} hours`;
+            }
+            
+            document.getElementById('mdd-stats-text').innerHTML = `
+                <h3 style="color:#ff4976; margin-top:0;">Maximum Drawdown: ${pct}%</h3>
+                <p style="margin: 5px 0;"><strong>Peak:</strong> $${mddStats.mddPeakPrice.toFixed(4)} on ${new Date(mddStats.mddPeakTime * 1000).toLocaleString()}</p>
+                <p style="margin: 5px 0;"><strong>Trough:</strong> $${mddStats.mddTroughPrice.toFixed(4)} on ${new Date(mddStats.mddTroughTime * 1000).toLocaleString()}</p>
+                <p style="color:#4bffb5; margin-bottom:0;"><strong>Recovery Time:</strong> ${recText}</p>
+            `;
+            
+            const times = data.map(d => new Date(d.time * 1000));
+            const closes = data.map(d => d.close);
+            
+            const traceLine = {
+                x: times,
+                y: closes,
+                type: 'scatter',
+                mode: 'lines',
+                line: { color: '#888' },
+                name: 'Price'
+            };
+            
+            const peakDate = new Date(mddStats.mddPeakTime * 1000);
+            const troughDate = new Date(mddStats.mddTroughTime * 1000);
+            
+            const annotations = [
+                {
+                    x: peakDate,
+                    y: mddStats.mddPeakPrice,
+                    text: 'PEAK',
+                    showarrow: true,
+                    arrowhead: 2,
+                    ax: 0, ay: -40,
+                    font: { color: '#ff4976' }, arrowcolor: '#ff4976'
+                },
+                {
+                    x: troughDate,
+                    y: mddStats.mddTroughPrice,
+                    text: 'TROUGH',
+                    showarrow: true,
+                    arrowhead: 2,
+                    ax: 0, ay: 40,
+                    font: { color: '#ff4976' }, arrowcolor: '#ff4976'
+                }
+            ];
+            
+            if (mddStats.recovered) {
+                const recDate = new Date(mddStats.recoveryTime * 1000);
+                annotations.push({
+                    x: recDate,
+                    y: mddStats.mddPeakPrice,
+                    text: 'RECOVERED',
+                    showarrow: true,
+                    arrowhead: 2,
+                    ax: 0, ay: -40,
+                    font: { color: '#4bffb5' }, arrowcolor: '#4bffb5'
+                });
+            }
+            
+            const layout = {
+                title: 'Price Curve & MDD Event',
+                paper_bgcolor: '#1e1e1e',
+                plot_bgcolor: '#1e1e1e',
+                font: { color: '#DDD' },
+                xaxis: { gridcolor: '#333' },
+                yaxis: { gridcolor: '#333' },
+                margin: { l: 50, r: 50, t: 50, b: 50 },
+                annotations: annotations
+            };
+            
+            Plotly.newPlot('mdd-chart-div', [traceLine], layout, {responsive: true});
+        }
+
+        function drawHeatmapView(data, volumeData) {
+            if (data.length === 0) return;
+            
+            const xDates = [];
+            const yReturns = [];
+            
+            for (let i = 1; i < data.length; i++) {
+                xDates.push(data[i].time * 1000);
+                
+                const prevClose = data[i-1].close;
+                const currentClose = data[i].close;
+                const ret = ((currentClose - prevClose) / prevClose) * 100;
+                
+                yReturns.push(ret);
+            }
+            
+            const numBinsX = 50;
+            const numBinsY = 40;
+            
+            let minX = Math.min(...xDates);
+            let maxX = Math.max(...xDates);
+            let minY = Math.min(...yReturns);
+            let maxY = Math.max(...yReturns);
+            
+            if (minX === maxX) { minX -= 100000; maxX += 100000; }
+            if (minY === maxY) { minY -= 1; maxY += 1; }
+            
+            const stepX = (maxX - minX) / numBinsX;
+            const stepY = (maxY - minY) / numBinsY;
+            
+            const zMatrix = Array(numBinsY).fill(0).map(() => Array(numBinsX).fill(0));
+            const xLabels = Array(numBinsX).fill(0).map((_, i) => {
+                return new Date(minX + (i + 0.5) * stepX).toISOString().replace('T', ' ').substring(0, 19);
+            });
+            const yLabels = Array(numBinsY).fill(0).map((_, i) => minY + (i + 0.5) * stepY);
+            
+            for (let i = 0; i < xDates.length; i++) {
+                let xIdx = Math.floor((xDates[i] - minX) / stepX);
+                let yIdx = Math.floor((yReturns[i] - minY) / stepY);
+                
+                if (xIdx >= numBinsX) xIdx = numBinsX - 1;
+                if (xIdx < 0) xIdx = 0;
+                if (yIdx >= numBinsY) yIdx = numBinsY - 1;
+                if (yIdx < 0) yIdx = 0;
+                
+                zMatrix[yIdx][xIdx] += 1;
+            }
+            
+            const trace = {
+                x: xLabels,
+                y: yLabels,
+                z: zMatrix,
+                type: 'surface',
+                colorscale: [
+                    [0, '#2c2c2c'],
+                    [0.25, '#0e4429'],
+                    [0.5, '#006d32'],
+                    [0.75, '#26a641'],
+                    [1, '#39d353']
+                ],
+                showscale: false
+            };
+            
+            const layout = {
+                title: '3D Return Distribution Matrix (Dwell-Time)',
+                paper_bgcolor: '#1e1e1e',
+                font: { color: '#DDD' },
+                margin: { l: 0, r: 0, t: 50, b: 0 },
+                scene: {
+                    xaxis: { title: 'Date (X)', gridcolor: '#444', backgroundcolor: '#1e1e1e', showbackground: true },
+                    yaxis: { title: 'Price Return % (Y)', gridcolor: '#444', backgroundcolor: '#1e1e1e', showbackground: true },
+                    zaxis: { title: 'Frequency / Time Spent (Z)', gridcolor: '#444', backgroundcolor: '#1e1e1e', showbackground: true },
+                    camera: {
+                        eye: { x: -1.5, y: -1.5, z: 0.5 }
+                    }
+                }
+            };
+            
+            Plotly.newPlot('heatmap-container', [trace], layout, {responsive: true});
+        }
+
+        function switchView(view) {
+            document.getElementById('nav-chart').classList.remove('active');
+            document.getElementById('nav-vwap').classList.remove('active');
+            document.getElementById('nav-mdd').classList.remove('active');
+            document.getElementById('nav-heatmap').classList.remove('active');
+            
+            document.getElementById('chart-container').style.display = 'none';
+            document.getElementById('vwap-container').style.display = 'none';
+            document.getElementById('mdd-container').style.display = 'none';
+            document.getElementById('heatmap-container').style.display = 'none';
+            
+            if(view === 'chart') {
+                document.getElementById('nav-chart').classList.add('active');
+                document.getElementById('chart-container').style.display = 'block';
+                chart.resize(document.getElementById('chart-container').clientWidth, document.getElementById('chart-container').clientHeight);
+            } else if (view === 'vwap') {
+                document.getElementById('nav-vwap').classList.add('active');
+                document.getElementById('vwap-container').style.display = 'block';
+                window.dispatchEvent(new Event('resize'));
+            } else if (view === 'mdd') {
+                document.getElementById('nav-mdd').classList.add('active');
+                document.getElementById('mdd-container').style.display = 'flex';
+                window.dispatchEvent(new Event('resize'));
+            } else if (view === 'heatmap') {
+                document.getElementById('nav-heatmap').classList.add('active');
+                document.getElementById('heatmap-container').style.display = 'block';
+                window.dispatchEvent(new Event('resize'));
+            }
+        }
         function zoomIn() {
             const currentOptions = chart.timeScale().options();
             chart.timeScale().applyOptions({
@@ -214,6 +540,14 @@
                     ma50Series.setData(calculateSMA(currentCandleData, 50));
                     ma200Series.setData(calculateSMA(currentCandleData, 200));
 
+                    const vwapData = calculateVWAP(data.candlestick, data.volume);
+                    drawVWAPHistogram(vwapData);
+
+                    const mddStats = calculateMDDAndRecovery(currentCandleData);
+                    drawMDDView(currentCandleData, mddStats);
+
+                    drawHeatmapView(currentCandleData, data.volume);
+
                     chart.timeScale().fitContent();
                 } else {
                     currentCandleData = [];
@@ -222,6 +556,10 @@
                     ma20Series.setData([]);
                     ma50Series.setData([]);
                     ma200Series.setData([]);
+                    Plotly.purge('vwap-container');
+                    Plotly.purge('mdd-chart-div');
+                    Plotly.purge('heatmap-container');
+                    document.getElementById('mdd-stats-text').innerHTML = '';
                     alert("No data available for this selection.");
                 }
             } catch(e) {
